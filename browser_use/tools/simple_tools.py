@@ -29,6 +29,7 @@ from browser_use.browser.views import BrowserError
 from browser_use.tools.registry.service import Registry
 from browser_use.tools.views import (
 	ClickElementAction,
+	CreateReconnaissancePlanAction,
 	DoneAction,
 	GetDropdownOptionsAction,
 	GoToUrlAction,
@@ -36,6 +37,7 @@ from browser_use.tools.views import (
 	ScrollAction,
 	SearchGoogleAction,
 	SelectDropdownOptionAction,
+	SmartExtractAllDataAction,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,7 +130,10 @@ class SimpleTools(Generic[Context]):
 				await event
 				click_metadata = await event.event_result(raise_if_any=True, raise_if_none=False)
 				
-				memory = f'Clicked element {params.index}'
+				# Wait for page to potentially navigate after click
+				await asyncio.sleep(3)
+				
+				memory = f'Clicked element {params.index} (pagination navigation)'
 				logger.info(f'🖱️ {memory}')
 				
 				return ActionResult(
@@ -224,15 +229,26 @@ class SimpleTools(Generic[Context]):
 			start_from_char: int = 0,
 		):
 			try:
-				# Get page content
-				cdp_session = await browser_session.get_or_create_cdp_session()
-				body_id = await cdp_session.cdp_client.send.DOM.getDocument(session_id=cdp_session.session_id)
-				page_html_result = await cdp_session.cdp_client.send.DOM.getOuterHTML(
-					params={'backendNodeId': body_id['root']['backendNodeId']}, 
-					session_id=cdp_session.session_id
-				)
-				page_html = page_html_result['outerHTML']
+				# Get page content with retries for CDP stability
+				page_html = None
 				current_url = await browser_session.get_current_page_url()
+				
+				for attempt in range(3):
+					try:
+						cdp_session = await browser_session.get_or_create_cdp_session()
+						body_id = await cdp_session.cdp_client.send.DOM.getDocument(session_id=cdp_session.session_id)
+						page_html_result = await cdp_session.cdp_client.send.DOM.getOuterHTML(
+							params={'backendNodeId': body_id['root']['backendNodeId']}, 
+							session_id=cdp_session.session_id
+						)
+						page_html = page_html_result['outerHTML']
+						break
+					except Exception as e:
+						logger.warning(f"CDP error getting page content on attempt {attempt + 1}: {e}")
+						if attempt < 2:
+							await asyncio.sleep(3)
+						else:
+							raise
 				
 				# Convert to clean markdown
 				import html2text
@@ -342,8 +358,31 @@ Output the relevant information concisely without conversational format."""
 		async def detect_pagination(browser_session: BrowserSession):
 			"""Enhanced pagination detection with better pattern recognition"""
 			try:
-				# Get current page elements
-				selector_map = await browser_session.get_selector_map()
+				# Wait a bit for page to stabilize after navigation
+				await asyncio.sleep(2)
+				
+				# CRITICAL: Scroll down to reveal pagination controls at bottom of page
+				logger.info("🔍 Scrolling down to reveal pagination controls...")
+				scroll_event = browser_session.event_bus.dispatch(
+					ScrollEvent(direction='down', amount=2000)  # Scroll down to bottom
+				)
+				await scroll_event
+				await scroll_event.event_result(raise_if_any=True, raise_if_none=False)
+				await asyncio.sleep(1)  # Let page settle
+				
+				# Retry getting selector map if CDP fails
+				selector_map = None
+				for attempt in range(3):
+					try:
+						selector_map = await browser_session.get_selector_map()
+						break
+					except Exception as e:
+						logger.warning(f"CDP error on attempt {attempt + 1}: {e}")
+						if attempt < 2:
+							await asyncio.sleep(3)
+						else:
+							raise
+				
 				current_url = await browser_session.get_current_page_url()
 				
 				pagination_info = {
@@ -359,8 +398,8 @@ Output the relevant information concisely without conversational format."""
 				logger.info(f'🔍 Analyzing {len(selector_map)} elements for pagination...')
 				
 				# Enhanced pagination detection patterns
-				next_patterns = ['next', '>', '→', 'forward', 'continue', 'mehr', 'siguiente']
-				page_number_patterns = [r'\d+', 'page']
+				next_patterns = ['next', '>', '→', 'forward', 'continue', 'more', 'load more', 'show more']
+				page_number_patterns = [r'\d+', 'page', '1', '2', '3', '4', '5']
 				
 				candidates = []
 				
@@ -492,151 +531,68 @@ Output the relevant information concisely without conversational format."""
 				logger.error(f'Pagination detection failed: {e}')
 				return ActionResult(error=f'Failed to detect pagination: {str(e)}')
 
-		# 8. EXTRACT ALL DATA WITH AUTO-PAGINATION
+		# 8. SMART RECONNAISSANCE PLANNER
 		@self.registry.action(
-			'Extract ALL data from current and subsequent pages using automatic pagination. Continues until no more pages.',
+			'Scout website structure first to create optimal extraction plan. Use IMMEDIATELY after navigating to target URL.',
+			param_model=CreateReconnaissancePlanAction,
 		)
-		async def extract_all_paginated_data(
-			query: str,
+		async def create_reconnaissance_plan(
+			params: CreateReconnaissancePlanAction,
 			browser_session: BrowserSession,
 			page_extraction_llm,
-			max_pages: int = 20,
 		):
-			"""Extract data from all pages automatically"""
+			"""Smart reconnaissance to understand website and create extraction plan"""
 			try:
-				all_data = []
-				current_page = 1
+				from browser_use.tools.planner_tool import SmartPlanner
 				
-				logger.info(f'🔄 Starting paginated extraction for: {query}')
+				logger.info(f'🕵️ Starting reconnaissance for: {params.query}')
 				
-				while current_page <= max_pages:
-					logger.info(f'📄 Processing page {current_page}...')
-					
-					# Scroll to load all content on current page
-					event = browser_session.event_bus.dispatch(
-						ScrollEvent(direction='down', amount=3000)
-					)
-					await event
-					await event.event_result(raise_if_any=True, raise_if_none=False)
-					
-					# Extract data from current page
-					current_url = await browser_session.get_current_page_url()
-					
-					# Get page content
-					cdp_session = await browser_session.get_or_create_cdp_session()
-					body_id = await cdp_session.cdp_client.send.DOM.getDocument(session_id=cdp_session.session_id)
-					page_html_result = await cdp_session.cdp_client.send.DOM.getOuterHTML(
-						params={'backendNodeId': body_id['root']['backendNodeId']}, 
-						session_id=cdp_session.session_id
-					)
-					page_html = page_html_result['outerHTML']
-					
-					# Convert to markdown
-					import html2text
-					h = html2text.HTML2Text()
-					h.ignore_links = False
-					h.ignore_images = True
-					h.body_width = 0
-					content = h.handle(page_html)
-					
-					# Truncate if too long
-					if len(content) > 30000:
-						content = content[:30000]
-					
-					# Extract data using LLM
-					system_prompt = f"""Extract all {query} from this webpage content. 
-Return only the relevant data in a clean, structured format.
-Focus on extracting complete information for each item found."""
-					
-					prompt = f'<query>\nExtract all {query}\n</query>\n\n<page_content>\n{content}\n</page_content>'
-					
-					from browser_use.llm.messages import SystemMessage, UserMessage
-					response = await asyncio.wait_for(
-						page_extraction_llm.ainvoke([
-							SystemMessage(content=system_prompt), 
-							UserMessage(content=prompt)
-						]), timeout=120.0
-					)
-					
-					page_data = response.completion
-					all_data.append({
-						'page': current_page,
-						'url': current_url,
-						'data': page_data
-					})
-					
-					# Check for next page
-					pagination_result = await self.detect_pagination(browser_session)
-					pagination_info = pagination_result.metadata or {}
-					
-					if not pagination_info.get('has_pagination'):
-						logger.info(f'✅ No more pages found. Completed extraction at page {current_page}')
-						break
-					
-					# Try to navigate to next page
-					next_index = pagination_info.get('next_button_index')
-					page_buttons = pagination_info.get('page_buttons', [])
-					
-					clicked_successfully = False
-					
-					# Try next button first
-					if next_index:
-						logger.info(f'🔄 Clicking Next button at index {next_index}...')
-						try:
-							node = await browser_session.get_element_by_index(next_index)
-							if node:
-								click_event = browser_session.event_bus.dispatch(ClickElementEvent(node=node))
-								await click_event
-								await click_event.event_result(raise_if_any=True, raise_if_none=False)
-								clicked_successfully = True
-								logger.info(f'✅ Successfully clicked Next button')
-						except Exception as e:
-							logger.warning(f'Failed to click Next button: {e}')
-					
-					# If no next button, try page number buttons
-					elif page_buttons and current_page < len(page_buttons) + 1:
-						target_page_idx = min(current_page, len(page_buttons) - 1) if current_page < len(page_buttons) else len(page_buttons) - 1
-						if target_page_idx >= 0:
-							page_index = page_buttons[target_page_idx]
-							logger.info(f'🔄 Clicking page button at index {page_index}...')
-							try:
-								node = await browser_session.get_element_by_index(page_index)
-								if node:
-									click_event = browser_session.event_bus.dispatch(ClickElementEvent(node=node))
-									await click_event
-									await click_event.event_result(raise_if_any=True, raise_if_none=False)
-									clicked_successfully = True
-									logger.info(f'✅ Successfully clicked page button')
-							except Exception as e:
-								logger.warning(f'Failed to click page button: {e}')
-					
-					if clicked_successfully:
-						# Wait for page to load
-						await asyncio.sleep(3)
-						current_page += 1
-						logger.info(f'📄 Moved to page {current_page}')
-					else:
-						logger.info('❌ No more navigation options found, ending pagination')
-						break
-				
-				# Consolidate all data
-				consolidated_data = []
-				for page_result in all_data:
-					consolidated_data.append(f"Page {page_result['page']}: {page_result['data']}")
-				
-				final_result = f"COMPLETE DATASET ACROSS {len(all_data)} PAGES:\n\n" + "\n\n".join(consolidated_data)
-				
-				memory = f'Extracted data from {len(all_data)} pages for query: {query}'
-				logger.info(f'📊 {memory}')
+				# Use the smart planner system
+				smart_planner = SmartPlanner(browser_session, page_extraction_llm)
+				plan = await smart_planner.create_extraction_plan(params.query)
 				
 				return ActionResult(
-					extracted_content=final_result,
-					long_term_memory=memory,
-					metadata={'pages_processed': len(all_data), 'query': query}
+					extracted_content=f"RECONNAISSANCE COMPLETE\n\nEXECUTION PLAN:\n{plan['execution_strategy']}\n\nRECONNAISSANCE SUMMARY:\n{plan['reconnaissance_summary']}",
+					long_term_memory=f"Created extraction plan for: {params.query}",
+					metadata=plan
 				)
 				
 			except Exception as e:
-				logger.error(f'Paginated extraction failed: {e}')
+				logger.error(f'Reconnaissance planning failed: {e}')
+				return ActionResult(error=f'Failed to create extraction plan: {str(e)}')
+
+		# 9. SMART PAGINATION & DATA EXTRACTION  
+		@self.registry.action(
+			'Use intelligent pagination system to extract ALL data. Handles top/bottom pagination, progressive scrolling, prevents infinite loops.',
+			param_model=SmartExtractAllDataAction,
+		)
+		async def smart_extract_all_data(
+			params: SmartExtractAllDataAction,
+			browser_session: BrowserSession,
+			page_extraction_llm,
+		):
+			"""Smart extraction with comprehensive pagination handling"""
+			try:
+				from browser_use.tools.smart_pagination import SmartPaginationExtractor
+				
+				logger.info(f'🧠 Starting SMART paginated extraction for: {params.query}')
+				
+				# Use the smart pagination system
+				smart_extractor = SmartPaginationExtractor(browser_session, page_extraction_llm)
+				results = await smart_extractor.extract_all_data(params.query, params.max_pages)
+				
+				return ActionResult(
+					extracted_content=results['total_content'],
+					long_term_memory=results['extraction_summary'],
+					metadata={
+						'pages_processed': results['pages_processed'],
+						'query': params.query,
+						'extraction_method': 'smart_pagination'
+					}
+				)
+				
+			except Exception as e:
+				logger.error(f'Smart paginated extraction failed: {e}')
 				return ActionResult(error=f'Failed to extract paginated data: {str(e)}')
 
 	def _register_done_action(self):

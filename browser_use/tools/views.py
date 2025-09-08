@@ -91,3 +91,12 @@ class GetDropdownOptionsAction(BaseModel):
 class SelectDropdownOptionAction(BaseModel):
 	index: int = Field(ge=1, description='index of the dropdown element to select an option for')
 	text: str = Field(description='the text or exact value of the option to select')
+
+
+class CreateReconnaissancePlanAction(BaseModel):
+	query: str = Field(description='what data to extract and analyze')
+
+
+class SmartExtractAllDataAction(BaseModel):
+	query: str = Field(description='what data to extract from all pages')
+	max_pages: int = Field(default=15, description='maximum number of pages to process')

@@ -48,15 +48,16 @@ class GTMAgent:
 		task = self._build_pagination_task(url)
 		
 		# Create agent with GTM-optimized system prompt
+		import os
+		current_dir = os.path.dirname(__file__)
+		gtm_prompt_path = os.path.join(current_dir, 'agent', 'system_prompt_gtm.md')
+		
 		agent = Agent(
 			task=task,
 			llm=self.llm,
 			controller=self.tools,
-			system_prompt_file_path=None,  # We'll use custom prompt
+			system_prompt_file_path=gtm_prompt_path,
 		)
-		
-		# Override system prompt for data extraction
-		agent.system_prompt = self._get_gtm_system_prompt()
 		
 		# Execute extraction
 		try:
@@ -73,39 +74,32 @@ class GTMAgent:
 			raise
 	
 	def _build_pagination_task(self, url: str) -> str:
-		"""Build task prompt optimized for pagination and data extraction"""
-		domain = urlparse(url).netloc
-		
+		"""Build universal GTM task prompt"""
 		return f"""
-SPECIALIZED DATA EXTRACTION TASK:
+UNIVERSAL GTM DATA EXTRACTION:
 
-Extract ALL {self.extraction_query} from: {url}
+Target URL: {url}
+Extract: {self.extraction_query}
 
-CRITICAL REQUIREMENTS:
-1. This website likely has PAGINATION - you MUST go through ALL pages
-2. Extract data from EVERY page, not just the first page
-3. Use automatic pagination detection and handling
-4. Consolidate ALL data from ALL pages into final result
+EXECUTION PROTOCOL:
+1. Navigate to target URL
+2. Analyze page structure and available filters
+3. Apply any relevant filters (date ranges, categories, types, etc.)
+4. Scroll to ensure all content is loaded
+5. Extract data from current page using extract_structured_data
+6. Detect pagination controls using detect_pagination  
+7. Navigate through ALL pages systematically
+8. Continue until no more pages exist
+9. Consolidate complete dataset from all pages
 
-EXECUTION STRATEGY:
-1. Navigate to URL and wait for full page load
-2. Scroll to see all content on current page  
-3. Extract all {self.extraction_query} from current page
-4. Automatically detect pagination (Next buttons, page numbers, load more, etc.)
-5. Click to next page and repeat steps 2-4
-6. Continue until NO MORE pages exist
-7. Return consolidated list of ALL data from ALL pages
+CRITICAL SUCCESS FACTORS:
+✅ Process ALL available pages (never stop at page 1)
+✅ Apply filters before extraction when available
+✅ Handle any pagination pattern (buttons, numbers, load more)
+✅ Extract complete, clean dataset
+✅ Verify no pages were missed
 
-PAGINATION DETECTION:
-- Look for: "Next", "→", "Show more", page numbers, "Load more" buttons
-- Check if pagination controls are disabled/greyed out (indicates last page)
-- Monitor URL changes to confirm page navigation
-- Handle different pagination patterns (buttons, links, infinite scroll)
-
-OUTPUT: Complete consolidated list of all {self.extraction_query} found across ALL pages.
-
-Target domain: {domain}
-Max pages to process: {self.max_pages}
+Max Pages: {self.max_pages}
 """
 
 	def _get_gtm_system_prompt(self) -> str:
