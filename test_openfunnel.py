@@ -38,6 +38,10 @@ async def main():
 	# Test case
 	url = "https://13f.info/form-d?from=2025-08-01&to=2025-08-17&types=other+technology&forms=D"
 	instructions = "Extract all company names from this page. Make sure to go through ALL pages of results, not just the first page."
+	url="https://openfunnel.dev/case-studies"
+	instructions="Extract all company names from this page. Make sure to go through ALL pages of results, not just the first page."
+	url="https://www.formds.com/filings/advanced_filter?filters_params%5Bdate_select%5D=Last+Month&filters_params%5Bequity_debt_select%5D=&filters_params%5Bexclusion_select%5D=&filters_params%5Bindustry_select%5D=Other+Technology&filters_params%5Blist_or_map_select%5D=Show+as+a+list&filters_params%5Bmiles_select%5D=&filters_params%5Bnew_amended_select%5D=&filters_params%5Bsize_select%5D=&filters_params%5Bstate_select%5D=&page=1&utf8=%E2%9C%93&zip_code="
+	instructions="Extract all company names from this page. Make sure to go through ALL pages of results, not just the first page."
 	
 	print(f"📍 URL: {url}")
 	print(f"📝 Instructions: {instructions}")

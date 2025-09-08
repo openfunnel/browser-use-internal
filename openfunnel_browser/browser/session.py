@@ -182,14 +182,49 @@ class BrowserSession:
 	
 	async def click_element(self, selector: str):
 		"""Click element by CSS selector"""
-		script = f"""
-		document.querySelector('{selector}').click();
-		"""
+		# Handle :contains() pseudo-selector for clicking
+		if ':contains(' in selector:
+			import re
+			match = re.search(r':contains\("([^"]+)"\)', selector)
+			if match:
+				search_text = match.group(1)
+				base_selector = selector.split(':contains(')[0] or '*'
+				script = f"""
+				var elements = Array.from(document.querySelectorAll('{base_selector}')).filter(el => 
+					el.innerText && el.innerText.includes('{search_text}')
+				);
+				if (elements.length > 0) {{
+					elements[0].click();
+					true;
+				}} else {{
+					false;
+				}}
+				"""
+			else:
+				return False
+		else:
+			script = f"""
+			var element = document.querySelector('{selector}');
+			if (element) {{
+				element.click();
+				true;
+			}} else {{
+				false;
+			}}
+			"""
+		
 		try:
-			await self._send_command('Runtime.evaluate', {'expression': script})
-			await asyncio.sleep(2)  # Wait for click action
-			logger.info(f"🖱️ Clicked element: {selector}")
-			return True
+			response = await self._send_command('Runtime.evaluate', {'expression': script})
+			result = response.get('result', {})
+			success = result.get('value', False)
+			
+			if success:
+				await asyncio.sleep(3)  # Wait for navigation/action
+				logger.info(f"🖱️ Successfully clicked: {selector}")
+				return True
+			else:
+				logger.warning(f"⚠️ Element not found: {selector}")
+				return False
 		except Exception as e:
 			logger.error(f"❌ Failed to click {selector}: {e}")
 			return False
@@ -211,20 +246,48 @@ class BrowserSession:
 			return False
 	
 	async def find_elements(self, selector: str) -> List[Dict[str, Any]]:
-		"""Find elements by CSS selector"""
-		script = f"""
-		Array.from(document.querySelectorAll('{selector}')).map((el, i) => ({{
-			index: i,
-			text: el.innerText || el.textContent || '',
-			tag: el.tagName.toLowerCase(),
-			href: el.href || '',
-			classes: el.className || '',
-			visible: el.offsetParent !== null
-		}}))
-		"""
+		"""Find elements by CSS selector or text content"""
+		# Handle :contains() pseudo-selector manually since it's not standard CSS
+		if ':contains(' in selector:
+			# Extract the text to search for
+			import re
+			match = re.search(r':contains\("([^"]+)"\)', selector)
+			if match:
+				search_text = match.group(1)
+				base_selector = selector.split(':contains(')[0] or '*'
+				script = f"""
+				Array.from(document.querySelectorAll('{base_selector}')).filter(el => 
+					el.innerText && el.innerText.includes('{search_text}')
+				).map((el, i) => ({{
+					index: i,
+					text: (el.innerText || el.textContent || '').trim(),
+					tag: el.tagName.toLowerCase(),
+					href: el.href || '',
+					classes: el.className || '',
+					visible: el.offsetParent !== null
+				}}))
+				"""
+			else:
+				return []
+		else:
+			script = f"""
+			Array.from(document.querySelectorAll('{selector}')).map((el, i) => ({{
+				index: i,
+				text: (el.innerText || el.textContent || '').trim(),
+				tag: el.tagName.toLowerCase(),
+				href: el.href || '',
+				classes: el.className || '',
+				visible: el.offsetParent !== null
+			}}))
+			"""
+		
 		try:
 			response = await self._send_command('Runtime.evaluate', {'expression': script})
-			return response['result']['value'] if 'value' in response['result'] else []
+			result = response.get('result', {})
+			if 'value' in result:
+				return result['value']
+			else:
+				return []
 		except Exception as e:
 			logger.error(f"❌ Failed to find elements {selector}: {e}")
 			return []

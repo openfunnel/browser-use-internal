@@ -97,15 +97,56 @@ class GTMAgent:
 		logger.info("🚀 Executing reconnaissance-guided extraction...")
 		
 		try:
-			# Check if pagination was detected
-			pagination_found = recon_result.get('pagination_analysis', {}).get('pagination_found', False)
+			# NUCLEAR OPTION: If instructions mention "ALL pages", force multi-page
+			force_multipage_keywords = ['all pages', 'all results', 'every page', 'each page', 'through all', 'not just the first page']
+			force_multipage = any(keyword in instructions.lower() for keyword in force_multipage_keywords)
 			
-			if pagination_found:
-				logger.info("📄 Pagination detected - using smart pagination extraction")
-				# Use smart pagination with limited pages for safety
-				return await self.tools.smart_paginate_and_extract(instructions, max_pages=15)
+			if force_multipage:
+				logger.info("🚨 *** NUCLEAR OPTION TRIGGERED ***")
+				logger.info(f"   Instructions contain multi-page keywords: {instructions}")
+				logger.info("   🚀 FORCING MULTI-PAGE EXTRACTION REGARDLESS OF DETECTION")
+				return await self.tools.smart_paginate_and_extract(instructions, max_pages=20)
+			
+			# Check if pagination was detected by reconnaissance
+			pagination_analysis = recon_result.get('pagination_analysis', {})
+			pagination_found = pagination_analysis.get('pagination_found', False)
+			pagination_candidates = pagination_analysis.get('total_candidates', 0)
+			
+			# Debug logging
+			logger.info(f"🔍 DEBUGGING Pagination Analysis:")
+			logger.info(f"   - pagination_found: {pagination_found}")
+			logger.info(f"   - total_candidates: {pagination_candidates}")
+			logger.info(f"   - method_used: {pagination_analysis.get('method_used', 'N/A')}")
+			logger.info(f"   - current_page: {pagination_analysis.get('current_page', 'N/A')}")
+			logger.info(f"   - total_pages: {pagination_analysis.get('total_pages', 'N/A')}")
+			
+			# Try manual pagination detection 
+			manual_pagination_check = await self.tools.detect_pagination()
+			logger.info(f"🔍 Manual pagination check:")
+			logger.info(f"   - Found: {manual_pagination_check.get('pagination_found', False)}")
+			logger.info(f"   - Method: {manual_pagination_check.get('method_used', 'N/A')}")
+			logger.info(f"   - Elements: {len(manual_pagination_check.get('pagination_elements', []))}")
+			
+			# If EITHER reconnaissance OR manual check finds pagination, use multi-page
+			if (pagination_found or pagination_candidates > 0 or 
+				manual_pagination_check.get('pagination_found', False)):
+				
+				logger.info("🚀 *** USING MULTI-PAGE EXTRACTION ***")
+				logger.info("   Reasons:")
+				if pagination_found:
+					logger.info(f"   ✓ Reconnaissance found pagination")
+				if pagination_candidates > 0:
+					logger.info(f"   ✓ Reconnaissance found {pagination_candidates} candidates")
+				if manual_pagination_check.get('pagination_found', False):
+					logger.info(f"   ✓ Manual check found pagination")
+				
+				# FORCE multi-page extraction
+				return await self.tools.smart_paginate_and_extract(instructions, max_pages=20)
+				
 			else:
-				logger.info("📄 No pagination detected - single page extraction")
+				logger.info("📄 NO PAGINATION DETECTED BY ANY METHOD - single page extraction")
+				logger.info(f"   - Reconnaissance: {pagination_found}")
+				logger.info(f"   - Manual check: {manual_pagination_check.get('pagination_found', False)}")
 				# Single page extraction with strategic scrolling
 				
 				# Scroll through different sections to capture all content

@@ -132,53 +132,35 @@ Provide a structured analysis of the data layout and extraction approach."""
 			return {"error": str(e), "phase": "structure_exploration"}
 	
 	async def _analyze_pagination_patterns(self) -> Dict[str, Any]:
-		"""Analyze pagination controls and patterns"""
-		logger.info("🔍 Phase 3: Analyzing pagination patterns...")
+		"""Analyze pagination using hybrid GTM tools detection"""
+		logger.info("🔍 Phase 3: Analyzing pagination with GTM tools...")
 		
 		try:
-			# Scroll directly to bottom to find pagination (much faster)
-			await self.browser.scroll_to_bottom()
-			await asyncio.sleep(1)
+			# Import here to avoid circular imports
+			from .gtm_tools import GTMTools
 			
-			# Look for pagination elements
-			pagination_selectors = [
-				'a[aria-label*="next" i]',
-				'button[aria-label*="next" i]',
-				'.pagination a',
-				'.pager a', 
-				'[class*="next"]',
-				'a:contains("Next")',
-				'a:contains(">")',
-			]
+			# Create temporary GTM tools instance for pagination detection
+			temp_tools = GTMTools(self.browser, self.llm)
 			
-			pagination_candidates = []
+			# Use our hybrid pagination detection
+			pagination_result = await temp_tools.detect_pagination()
 			
-			for selector in pagination_selectors:
-				elements = await self.browser.find_elements(selector)
-				for elem in elements:
-					if elem['visible']:
-						pagination_candidates.append({
-							'selector': selector,
-							'text': elem['text'][:50],
-							'tag': elem['tag'],
-							'href': elem.get('href', ''),
-							'classes': elem.get('classes', '')
-						})
-			
-			# Also check top of page (scroll to top instantly)
-			await self.browser.scroll_to_top()
-			await asyncio.sleep(1)
+			logger.info(f"🧠 Planner pagination result: {pagination_result.get('method_used', 'unknown')} method")
 			
 			return {
-				"pagination_found": len(pagination_candidates) > 0,
-				"candidates": pagination_candidates[:10],
-				"total_candidates": len(pagination_candidates),
+				"pagination_found": pagination_result.get('pagination_found', False),
+				"method_used": pagination_result.get('method_used', 'unknown'),
+				"pagination_elements": pagination_result.get('pagination_elements', []),
+				"current_page": pagination_result.get('current_page', 1),
+				"total_pages": pagination_result.get('total_pages', 'Unknown'),
+				"llm_analysis": pagination_result.get('llm_analysis', ''),
+				"total_candidates": len(pagination_result.get('pagination_elements', [])),
 				"phase": "pagination_analysis"
 			}
 			
 		except Exception as e:
 			logger.error(f"❌ Pagination analysis failed: {e}")
-			return {"error": str(e), "phase": "pagination_analysis"}
+			return {"error": str(e), "phase": "pagination_analysis", "pagination_found": False}
 	
 	async def _create_execution_strategy(self, query: str, initial_analysis: Dict, 
 										 structure_analysis: Dict, pagination_analysis: Dict) -> Dict[str, Any]:

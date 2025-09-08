@@ -147,58 +147,182 @@ class GTMTools:
 				"error": str(e)
 			}
 	
-	async def detect_pagination(self) -> Dict[str, Any]:
-		"""Detect pagination controls on current page"""
+	async def detect_pagination_llm(self) -> Dict[str, Any]:
+		"""Detect pagination using LLM analysis of page content - more reliable!"""
 		try:
-			# Scroll directly to bottom to find pagination (much faster)
-			await self.browser.scroll_to_bottom()
-			await asyncio.sleep(1)
+			logger.info("🧠 Using LLM-based pagination detection...")
 			
-			# Look for common pagination selectors
-			pagination_selectors = [
-				'a[aria-label*="next" i]',
-				'a[aria-label*="Next" i]', 
-				'button[aria-label*="next" i]',
-				'a:contains("Next")',
-				'a:contains(">")',
-				'a:contains("→")',
-				'.pagination a',
-				'.pager a',
-				'[class*="next"]',
-				'[class*="pagination"]'
-			]
+			# Get page text content 
+			page_text = await self.browser.get_page_text()
+			current_url = await self.browser.get_current_url()
 			
-			found_pagination = []
+			# Focus on the end of the page where pagination usually is
+			if len(page_text) > 8000:
+				page_sample = page_text[:2000] + "\n\n[...content truncated...]\n\n" + page_text[-4000:]
+			else:
+				page_sample = page_text
 			
-			for selector in pagination_selectors:
-				elements = await self.browser.find_elements(selector)
-				if elements:
-					for elem in elements:
-						if elem['visible'] and ('next' in elem['text'].lower() or '>' in elem['text']):
-							found_pagination.append({
-								'selector': selector,
-								'text': elem['text'][:50],
-								'tag': elem['tag']
-							})
+			# LLM analysis prompt
+			pagination_prompt = f"""Analyze this webpage content to detect pagination controls.
+
+URL: {current_url}
+
+WEBPAGE CONTENT:
+{page_sample}
+
+Look for pagination patterns like "← Previous 1 2 3 4 Next →", "Page 1 of 5", "Next" buttons, etc.
+
+Answer:
+PAGINATION_FOUND: Yes/No
+CURRENT_PAGE: X
+TOTAL_PAGES: X or Unknown  
+NEXT_ELEMENTS: Next, 2, 3, etc
+REASONING: Brief explanation"""
+			
+			llm_response = await self.llm.generate([{"role": "user", "content": pagination_prompt}])
+			
+			# Parse LLM response
+			pagination_found = "PAGINATION_FOUND: Yes" in llm_response
+			current_page, total_pages, next_elements = 1, "Unknown", []
+			
+			for line in llm_response.split('\n'):
+				line = line.strip()
+				if line.startswith('CURRENT_PAGE:'):
+					try:
+						current_page = int(line.split(':')[1].strip())
+					except:
+						pass
+				elif line.startswith('TOTAL_PAGES:'):
+					total_pages = line.split(':', 1)[1].strip()
+				elif line.startswith('NEXT_ELEMENTS:'):
+					elements_text = line.split(':', 1)[1].strip()
+					next_elements = [elem.strip() for elem in elements_text.split(',') if elem.strip()]
+			
+			# Find clickable elements for LLM suggestions
+			clickable_elements = []
+			if pagination_found and next_elements:
+				for element_text in next_elements[:5]:
+					if element_text and element_text.lower() not in ['none', 'unknown']:
+						elements = await self.browser.find_elements(f'a:contains("{element_text}")')
+						if not elements:
+							elements = await self.browser.find_elements(f'*:contains("{element_text}")')
+						
+						for elem in elements[:2]:
+							if elem['visible'] and elem['tag'] in ['a', 'button']:
+								clickable_elements.append({
+									'text': elem['text'][:50],
+									'tag': elem['tag'],
+									'href': elem.get('href', ''),
+									'method': 'llm'
+								})
+			
+			logger.info(f"🧠 LLM found: {pagination_found} | Page {current_page}/{total_pages} | {len(clickable_elements)} elements")
 			
 			return {
-				"action": "detect_pagination",
-				"pagination_found": len(found_pagination) > 0,
-				"pagination_elements": found_pagination[:5],  # Top 5 candidates
+				"method": "llm",
+				"pagination_found": pagination_found,
+				"current_page": current_page,
+				"total_pages": total_pages,
+				"pagination_elements": clickable_elements,
+				"llm_analysis": llm_response,
 				"status": "completed"
 			}
 			
 		except Exception as e:
-			logger.error(f"❌ Pagination detection failed: {e}")
+			logger.error(f"❌ LLM pagination detection failed: {e}")
+			return {"method": "llm", "status": "failed", "error": str(e), "pagination_found": False}
+
+	async def detect_pagination_css(self) -> Dict[str, Any]:
+		"""Fallback: Detect pagination using CSS selectors"""
+		try:
+			logger.info("🔍 Using CSS-based pagination detection (fallback)...")
+			
+			# Scroll to bottom first
+			await self.browser.scroll_to_bottom()
+			await asyncio.sleep(1)
+			
+			# CSS selector approach
+			pagination_selectors = [
+				'a:contains("Next")', 'a:contains(">")', 'a:contains("2")', 'a:contains("3")',
+				'.pagination a', '.pager a', '[class*="next"]', 'a[href*="page"]'
+			]
+			
+			found_pagination = []
+			for selector in pagination_selectors:
+				elements = await self.browser.find_elements(selector)
+				for elem in elements:
+					elem_text = elem['text'].lower().strip()
+					if elem['visible'] and (elem_text.isdigit() or 'next' in elem_text or '>' in elem_text):
+						found_pagination.append({
+							'text': elem['text'][:50],
+							'tag': elem['tag'],
+							'href': elem.get('href', ''),
+							'method': 'css'
+						})
+						
+			logger.info(f"🔍 CSS found: {len(found_pagination)} pagination elements")
+			
 			return {
-				"action": "detect_pagination",
-				"status": "failed", 
-				"error": str(e)
+				"method": "css",
+				"pagination_found": len(found_pagination) > 0,
+				"pagination_elements": found_pagination[:5],
+				"status": "completed"
 			}
+			
+		except Exception as e:
+			logger.error(f"❌ CSS pagination detection failed: {e}")
+			return {"method": "css", "status": "failed", "error": str(e), "pagination_found": False}
+
+	async def detect_pagination(self) -> Dict[str, Any]:
+		"""Hybrid pagination detection: LLM-first with CSS fallback"""
+		logger.info("🔍 Starting hybrid pagination detection...")
+		
+		# METHOD 1: Try LLM-based detection first (more reliable)
+		llm_result = await self.detect_pagination_llm()
+		
+		if llm_result['status'] == 'completed' and llm_result['pagination_found']:
+			logger.info("✅ LLM successfully detected pagination")
+			return {
+				"action": "hybrid_pagination_detection",
+				"method_used": "llm", 
+				"pagination_found": True,
+				"pagination_elements": llm_result['pagination_elements'],
+				"llm_analysis": llm_result.get('llm_analysis', ''),
+				"current_page": llm_result.get('current_page', 1),
+				"total_pages": llm_result.get('total_pages', 'Unknown'),
+				"status": "completed"
+			}
+		
+		# METHOD 2: Fallback to CSS-based detection
+		logger.info("🔄 LLM detection failed/found nothing, trying CSS fallback...")
+		css_result = await self.detect_pagination_css()
+		
+		if css_result['status'] == 'completed' and css_result['pagination_found']:
+			logger.info("✅ CSS fallback successfully detected pagination") 
+			return {
+				"action": "hybrid_pagination_detection",
+				"method_used": "css",
+				"pagination_found": True,
+				"pagination_elements": css_result['pagination_elements'],
+				"status": "completed"
+			}
+		
+		# METHOD 3: No pagination found by either method
+		logger.info("❌ No pagination detected by either LLM or CSS methods")
+		return {
+			"action": "hybrid_pagination_detection",
+			"method_used": "both_failed",
+			"pagination_found": False,
+			"pagination_elements": [],
+			"llm_result": llm_result,
+			"css_result": css_result,
+			"status": "completed"
+		}
 	
 	async def smart_paginate_and_extract(self, query: str, max_pages: int = 10) -> Dict[str, Any]:
 		"""Intelligently paginate through all pages and extract data"""
-		logger.info(f"🧠 Starting smart pagination for: {query}")
+		logger.info(f"🧠 *** STARTING MULTI-PAGE EXTRACTION FOR: {query} ***")
+		logger.info(f"🎯 Max pages to process: {max_pages}")
 		
 		all_extractions = []
 		current_page = 1
@@ -236,14 +360,56 @@ class GTMTools:
 					logger.info(f"🏁 No more pagination found, stopping at page {current_page}")
 					break
 				
-				# Try clicking the first pagination element
+				# Try clicking pagination elements - be more aggressive
 				clicked_next = False
-				for pag_elem in pagination_info['pagination_elements']:
-					result = await self.click_pagination(pag_elem['selector'])
-					if result['status'] == 'completed':
+				
+				# First try clicking "Next" or ">" buttons
+				next_buttons = [elem for elem in pagination_info['pagination_elements'] 
+							   if 'next' in elem['text'].lower() or '>' in elem['text']]
+				
+				for pag_elem in next_buttons:
+					logger.info(f"🖱️ Attempting to click Next button: {pag_elem['text']}")
+					# Try clicking by text instead of selector
+					text_to_click = pag_elem['text'].strip()
+					success = await self.browser.click_element(f'a:contains("{text_to_click}")')
+					
+					if success:
 						clicked_next = True
-						logger.info(f"🖱️ Successfully clicked pagination: {pag_elem['text']}")
+						logger.info(f"✅ Successfully clicked Next: {text_to_click}")
 						break
+					else:
+						# Fallback: try clicking any element with "Next" text
+						success = await self.browser.click_element('a:contains("Next")')
+						if success:
+							clicked_next = True
+							logger.info(f"✅ Successfully clicked Next (fallback)")
+							break
+				
+				# If no Next button worked, try page numbers (2, 3, 4, etc.)
+				if not clicked_next:
+					page_numbers = [elem for elem in pagination_info['pagination_elements'] 
+								   if elem['text'].strip().isdigit()]
+					
+					for pag_elem in page_numbers[:1]:  # Try first page number
+						text_to_click = pag_elem['text'].strip()
+						logger.info(f"🖱️ Attempting to click page number: {text_to_click}")
+						success = await self.browser.click_element(f'a:contains("{text_to_click}")')
+						
+						if success:
+							clicked_next = True
+							logger.info(f"✅ Successfully clicked page: {text_to_click}")
+							break
+				
+				# If still nothing worked, try clicking common pagination text
+				if not clicked_next:
+					common_pagination_texts = ["Next", ">", "→", "2", "3"]
+					for text in common_pagination_texts:
+						logger.info(f"🖱️ Trying fallback click: {text}")
+						success = await self.browser.click_element(f'a:contains("{text}")')
+						if success:
+							clicked_next = True
+							logger.info(f"✅ Successfully clicked fallback: {text}")
+							break
 				
 				if not clicked_next:
 					logger.info(f"❌ Could not click any pagination elements, stopping")
