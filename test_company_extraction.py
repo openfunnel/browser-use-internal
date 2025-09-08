@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Test simplified browser-use tools to extract company names from 13f.info
-Task: Get all company names from https://13f.info/form-d?from=2025-08-01&to=2025-08-17&types=other+technology&forms=D
+Test GTM Agent for extracting ALL company data with automatic pagination
+URL: https://13f.info/form-d?from=2025-08-01&to=2025-08-17&types=other+technology&forms=D
 """
 import asyncio
 import os
-from browser_use import Agent, ChatOpenAI
-from browser_use.tools.simple_tools import SimpleTools
+from browser_use import ChatOpenAI
+from browser_use.gtm_agent import GTMAgent
 
 async def main():
 	# Check API key
@@ -16,52 +16,49 @@ async def main():
 		print("Set it with: export OPENAI_API_KEY='your-key-here'")
 		return
 
-	print("🚀 Testing simplified tools: Company name extraction from 13f.info")
+	print("🚀 GTM Agent: Extracting ALL company data with auto-pagination")
 	
 	# Create LLM instance
 	llm = ChatOpenAI(model='gpt-4o-mini')
 	
-	# Create simplified tools
-	simple_tools = SimpleTools()
+	# Target URL
+	url = "https://13f.info/form-d?from=2025-08-01&to=2025-08-17&types=other+technology&forms=D"
 	
-	# Task: Extract company names from the specific URL
-	task = """
-	Navigate to https://13f.info/form-d?from=2025-08-01&to=2025-08-17&types=other+technology&forms=D
-	
-	Once on the page, extract ALL company names listed on this page.
-	
-	Use these steps:
-	1. Navigate to the URL
-	2. Let the page fully load
-	3. Scroll through the entire page to see all results
-	4. Extract all company names from the listings
-	5. Return a complete list of company names found
-	
-	Focus only on getting the company names - ignore other details.
-	"""
-	
-	# Create agent with simplified tools
-	agent = Agent(
-		task=task, 
+	# Create GTM agent specialized for company data extraction
+	gtm_agent = GTMAgent(
 		llm=llm,
-		controller=simple_tools  # Use our simplified tools
+		extraction_query="company names and business details",
+		max_pages=10,  # Safety limit
+		debug=True
 	)
 	
-	print("📋 Starting extraction...")
-	result = await agent.run()
+	print(f"📋 Starting GTM extraction from: {url}")
+	print("🔄 Agent will automatically handle pagination...")
 	
-	print("\n✅ Company extraction completed!")
-	print("=" * 50)
-	print("RESULTS:")
-	print("=" * 50)
-	
-	if result and hasattr(result, 'all_results'):
-		for action_result in result.all_results:
-			if action_result.is_done and action_result.extracted_content:
-				print(action_result.extracted_content)
-				break
-	else:
-		print(f"Raw result: {result}")
+	try:
+		# Extract ALL data across ALL pages
+		results = await gtm_agent.extract_all_data(url)
+		
+		print("\n✅ GTM Extraction completed!")
+		print("=" * 60)
+		print("RESULTS SUMMARY:")
+		print("=" * 60)
+		print(f"📊 Total entries found: {results['total_entries']}")
+		print(f"📄 Pages processed: {results['pages_processed']}")
+		print(f"🎯 Extraction query: {results['extraction_query']}")
+		print(f"📝 Status: {results['status']}")
+		
+		print("\n" + "=" * 60)
+		print("EXTRACTED DATA:")
+		print("=" * 60)
+		
+		for i, data_entry in enumerate(results['data'], 1):
+			print(f"\n--- Entry {i} ---")
+			print(data_entry[:500] + "..." if len(str(data_entry)) > 500 else data_entry)
+		
+	except Exception as e:
+		print(f"❌ GTM extraction failed: {e}")
+		raise
 
 if __name__ == '__main__':
 	asyncio.run(main())
