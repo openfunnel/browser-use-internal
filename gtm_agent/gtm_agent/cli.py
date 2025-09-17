@@ -47,7 +47,7 @@ def build_tool_descriptors() -> list[ToolDescriptor]:
     return [
         ToolDescriptor(
             name="observe_page",
-            description="Capture the current page title, URL, DOM excerpt, and optional screenshot",
+            description="Capture page title, DOM excerpt, and scroll metrics (height, position, is_at_bottom)",
             arg_schema='{ "max_dom_chars": int, "include_screenshot": bool, "full_page": bool }',
         ),
         ToolDescriptor(
@@ -57,7 +57,7 @@ def build_tool_descriptors() -> list[ToolDescriptor]:
         ),
         ToolDescriptor(
             name="scroll_page",
-            description="Scroll the page either by a delta or to the bottom",
+            description="Scroll by a delta or repeatedly to the bottom until is_at_bottom becomes true",
             arg_schema='{ "mode": "by|bottom", "x": int, "y": int }',
         ),
         ToolDescriptor(

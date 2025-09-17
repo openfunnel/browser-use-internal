@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Optional
 
 from playwright.async_api import Page
@@ -30,11 +31,22 @@ class ObservePageTool:
         title = await page.title()
         url = page.url
 
+        scroll_height, viewport_height, scroll_y = await asyncio.gather(
+            page.evaluate("() => document.scrollingElement.scrollHeight"),
+            page.evaluate("() => window.innerHeight"),
+            page.evaluate("() => window.scrollY"),
+        )
+        is_at_bottom = (scroll_y + viewport_height) >= (scroll_height - 4)
+
         observation: Dict[str, Any] = {
             "type": "page_state",
             "url": url,
             "title": title,
             "dom_excerpt": snapshot,
+            "scroll_height": scroll_height,
+            "viewport_height": viewport_height,
+            "scroll_y": scroll_y,
+            "is_at_bottom": is_at_bottom,
         }
 
         if self.include_screenshot or params.get("include_screenshot"):

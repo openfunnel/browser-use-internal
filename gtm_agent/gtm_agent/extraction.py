@@ -21,10 +21,12 @@ _PRIMARY_SELECTORS: Sequence[str] = (
     ".company",
     ".company-name",
     ".CompanyName",
+    "table td:first-child",
+    "table td:first-of-type",
+    "tbody td:first-child",
+    "tbody tr td:first-child",
     "li",
-    "tbody tr",
     "[role='listitem']",
-    "table tr",
 )
 
 
@@ -210,6 +212,12 @@ class CompanyExtractor:
         if any(token in lower for token in ("http", "@", "copyright", "privacy", "login")):
             return False
         if "points by" in lower or "comments" in lower:
+            return False
+        if "hacker news" in lower:
+            return False
+        if lower in {"past", "ask", "show", "jobs", "submit", "guidelines"}:
+            return False
+        if "name date filed" in lower:
             return False
         capitalized_words = sum(1 for token in re.findall(r"[A-Za-z]+", text) if token[0].isupper())
         return capitalized_words >= 1

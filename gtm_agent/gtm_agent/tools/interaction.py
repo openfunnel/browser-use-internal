@@ -56,18 +56,27 @@ class ScrollPageTool:
 
         try:
             if mode == "bottom":
-                final_height = await actions.scroll_to_bottom(
+                scroll_info = await actions.scroll_to_bottom(
                     step_px=int(params.get("step_px", 400)),
                     delay_ms=int(params.get("delay_ms", 100)),
                     max_iterations=int(params.get("max_iterations", 30)),
                 )
-                observation = {"event": "scroll_bottom", "final_height": final_height}
+                observation = {"event": "scroll_bottom", **scroll_info}
             else:
                 await actions.scroll_by(
                     x=int(params.get("x", 0)),
                     y=int(params.get("y", 400)),
                 )
-                observation = {"event": "scroll", "x": params.get("x", 0), "y": params.get("y", 400)}
+                scroll_state = await actions.scroll_to_bottom(step_px=0, delay_ms=0, max_iterations=0)
+                observation = {
+                    "event": "scroll",
+                    "x": params.get("x", 0),
+                    "y": params.get("y", 400),
+                    "scroll_height": scroll_state["scroll_height"],
+                    "scroll_y": scroll_state["scroll_y"],
+                    "viewport_height": scroll_state["viewport_height"],
+                    "at_bottom": scroll_state["at_bottom"],
+                }
                 wait_ms = params.get("wait_after_ms", 200)
                 if wait_ms:
                     await asyncio.sleep(wait_ms / 1000)

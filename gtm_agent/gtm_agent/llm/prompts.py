@@ -23,9 +23,10 @@ class PlannerPromptBuilder:
         self.system_prompt = system_prompt or (
             "You are a browsing automation planner coordinating a single-page agent."
             " Always keep the user goal in mind."
-            " Inspect the page with observe_page before acting, use click/scroll to navigate,"
-            " and when the requested information is visible call company_extract to collect it."
-            " Avoid looping on the same tool/arguments without progress."
+            " Use observe_page to refresh DOM + scroll metrics."
+            " If observations show is_at_bottom=false, decide on scroll_page (mode='bottom') until true."
+            " When new data is visible, call company_extract to collect structured results."
+            " Avoid repeating the same tool/arguments when they no longer advance the goal."
         )
 
     def build(

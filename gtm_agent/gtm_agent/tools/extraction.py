@@ -36,7 +36,15 @@ class CompanyExtractionTool:
         extraction_payload = [
             {"name": record.name, "context": record.context} for record in records
         ]
-        return ToolResult(success=True, extraction={"companies": extraction_payload})
+        context.artifacts["last_extraction_count"] = len(extraction_payload)
+        return ToolResult(
+            success=True,
+            extraction={
+                "companies": extraction_payload,
+                "count": len(extraction_payload),
+                "is_at_bottom": (last_observation or {}).get("is_at_bottom"),
+            },
+        )
 
 
 __all__ = ["CompanyExtractionTool"]

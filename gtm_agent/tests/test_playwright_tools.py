@@ -66,6 +66,8 @@ async def test_observe_tool_captures_dom_and_screenshot():
         assert "Company A" in result.observation["dom_excerpt"]
         assert result.observation.get("screenshot_available") is True
         assert "last_screenshot_bytes" in context.artifacts
+        assert result.observation["scroll_height"] >= result.observation["viewport_height"]
+        assert result.observation["is_at_bottom"]
 
 
 @pytest.mark.asyncio
