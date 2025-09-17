@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Company Listings</title>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    .company { margin: 8px 0; }
+    #load-more { margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Featured Companies</h1>
+  <div id="company-list">
+    <div class="company">Company A — Platform services</div>
+    <div class="company">Company B — Analytics suites</div>
+  </div>
+  <button id="load-more" onclick="loadMore()">Load more</button>
+  <script>
+    function loadMore() {
+      const container = document.getElementById('company-list');
+      const item = document.createElement('div');
+      item.className = 'company';
+      item.textContent = 'Company C — Automation tools';
+      container.appendChild(item);
+    }
+  </script>
+</body>
+</html>

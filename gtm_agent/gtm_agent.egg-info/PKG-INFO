@@ -1,0 +1,43 @@
+Metadata-Version: 2.4
+Name: gtm-agent
+Version: 0.1.0
+Summary: GTM-focused browser agent for extracting company names.
+Author-email: AutoBuilder <autobuilder@example.com>
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: anthropic>=0.17.0
+Requires-Dist: httpx>=0.25
+Requires-Dist: playwright<2.0,>=1.43.0
+Requires-Dist: pydantic>=2.5
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: structlog>=23.1
+Requires-Dist: tenacity>=8.2
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: pytest-mock>=3.12; extra == "dev"
+
+# GTM Agent
+
+A Playwright + LLM powered browser agent focused on extracting company names from arbitrary web pages for go-to-market workflows.
+
+## Features
+
+- Modular tool system combining DOM, action, vision, and inference capabilities
+- Configurable orchestration loop for sense → reason → act automation
+- JSON-formatted output capturing company names with optional context
+
+## Getting Started
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+playwright install chromium
+```
+
+Then run tests to verify the base scaffolding:
+
+```bash
+pytest
+```
