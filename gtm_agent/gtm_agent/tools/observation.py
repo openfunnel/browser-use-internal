@@ -31,10 +31,38 @@ class ObservePageTool:
         title = await page.title()
         url = page.url
 
-        scroll_height, viewport_height, scroll_y = await asyncio.gather(
+        scroll_height, viewport_height, scroll_y, pagination_candidates = await asyncio.gather(
             page.evaluate("() => document.scrollingElement.scrollHeight"),
             page.evaluate("() => window.innerHeight"),
             page.evaluate("() => window.scrollY"),
+            page.evaluate(
+                """
+() => {
+  const KEYWORDS = ['next', 'older', 'more', 'load more', 'older posts', 'next ›', 'next »', 'next page'];
+  const results = [];
+  const nodes = Array.from(document.querySelectorAll('a, button'));
+  for (const node of nodes) {
+    const text = (node.innerText || node.textContent || '').trim();
+    const lower = text.toLowerCase();
+    const rel = (node.getAttribute('rel') || '').toLowerCase();
+    const href = node.getAttribute('href') || '';
+    const datasetId = node.getAttribute('data-testid') || '';
+    if (!text && !rel.includes('next')) continue;
+    const matchesKeyword = KEYWORDS.some((kw) => lower.includes(kw));
+    if (matchesKeyword || rel.includes('next')) {
+      results.push({
+        text,
+        href,
+        rel,
+        tag: node.tagName.toLowerCase(),
+        datasetId,
+      });
+    }
+  }
+  return results.slice(0, 5);
+}
+"""
+            ),
         )
         is_at_bottom = (scroll_y + viewport_height) >= (scroll_height - 4)
 
@@ -47,11 +75,13 @@ class ObservePageTool:
             "viewport_height": viewport_height,
             "scroll_y": scroll_y,
             "is_at_bottom": is_at_bottom,
+            "pagination_candidates": pagination_candidates,
         }
 
         if self.include_screenshot or params.get("include_screenshot"):
             screenshot_bytes = await page.screenshot(full_page=params.get("full_page", False))
             context.artifacts["last_screenshot_bytes"] = screenshot_bytes
+            context.artifacts["last_screenshot_mime"] = "image/png"
             observation["screenshot_available"] = True
 
         return ToolResult(success=True, observation=observation)

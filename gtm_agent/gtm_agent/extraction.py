@@ -9,8 +9,8 @@ from dataclasses import dataclass
 import structlog
 from typing import Iterable, List, Optional, Sequence, Set
 
-from .llm.base import TextLLMClient
-from .llm.types import ChatMessage, LLMResult
+from .llm.base import TextLLMClient, VisionLLMClient
+from .llm.types import ChatMessage, LLMResult, VisionPrompt
 from .tools.dom import DomToolbox
 
 _LOG = structlog.get_logger(__name__)
@@ -21,6 +21,12 @@ _PRIMARY_SELECTORS: Sequence[str] = (
     ".company",
     ".company-name",
     ".CompanyName",
+    "article h2",
+    "article h3",
+    "section h2",
+    "section h3",
+    "h2",
+    "h3",
     "table td:first-child",
     "table td:first-of-type",
     "tbody td:first-child",
@@ -39,9 +45,16 @@ class CompanyRecord:
 class CompanyExtractor:
     """Collects candidate strings using DOM heuristics and optional LLM cleanup."""
 
-    def __init__(self, dom: DomToolbox, llm: Optional[TextLLMClient] = None) -> None:
+    def __init__(
+        self,
+        dom: DomToolbox,
+        llm: Optional[TextLLMClient] = None,
+        vision_llm: Optional[VisionLLMClient] = None,
+    ) -> None:
         self.dom = dom
         self.llm = llm
+        self.vision_llm = vision_llm
+        self.debug_events: list[tuple[str, str]] = []
 
     async def extract(
         self,
@@ -49,21 +62,50 @@ class CompanyExtractor:
         max_results: int = 25,
         goal: Optional[str] = None,
         dom_excerpt: Optional[str] = None,
+        screenshot_bytes: Optional[bytes] = None,
+        screenshot_mime_type: str = "image/png",
     ) -> List[CompanyRecord]:
         candidates = await self._collect_candidates()
         unique = self._dedupe(candidates)
 
-        if self.llm and unique:
-            refined = await self._refine_with_llm(
-                unique,
-                max_results=max_results,
-                goal=goal,
-                dom_excerpt=dom_excerpt,
-            )
-            if refined:
-                return refined[:max_results]
+        combined = list(unique)
 
-        return unique[:max_results]
+        if self.vision_llm and screenshot_bytes:
+            vision_records = await self._extract_with_vision(
+                screenshot_bytes,
+                mime_type=screenshot_mime_type,
+                goal=goal,
+                max_results=max_results,
+            )
+            if vision_records:
+                combined = self._merge_records(combined, vision_records)
+
+        if self.llm:
+            if combined:
+                refined = await self._refine_with_llm(
+                    combined,
+                    max_results=max_results,
+                    goal=goal,
+                    dom_excerpt=dom_excerpt,
+                )
+                if refined:
+                    return refined[:max_results]
+            elif dom_excerpt:
+                direct = await self._extract_from_dom(
+                    dom_excerpt,
+                    max_results=max_results,
+                    goal=goal,
+                )
+                if direct:
+                    return direct[:max_results]
+
+        return combined[:max_results]
+
+    def _debug(self, stage: str, message: str) -> None:
+        preview = message.strip()
+        if len(preview) > 400:
+            preview = preview[:397] + "..."
+        self.debug_events.append((stage, preview))
 
     async def _collect_candidates(self) -> List[CompanyRecord]:
         collected: List[CompanyRecord] = []
@@ -93,6 +135,19 @@ class CompanyExtractor:
             seen.add(key)
             unique.append(record)
         return unique
+
+    def _merge_records(
+        self, existing: List[CompanyRecord], new_records: List[CompanyRecord]
+    ) -> List[CompanyRecord]:
+        combined = list(existing)
+        seen = {record.name.lower() for record in existing}
+        for record in new_records:
+            key = record.name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            combined.append(record)
+        return combined
 
     async def _refine_with_llm(
         self,
@@ -136,12 +191,122 @@ class CompanyExtractor:
             result: LLMResult = await self.llm.complete(messages, max_tokens=768, temperature=0.0)  # type: ignore[arg-type]
         except Exception as exc:
             _LOG.warning("extraction_llm_call_failed", error=str(exc))
+            self._debug("llm_refine_error", str(exc))
             return records
 
         refined = self._parse_llm_response(result.text, fallback=records)
+        self._debug("llm_refine_response", result.text)
         if refined is records:
             _LOG.info("extraction_llm_fallback", preview=result.text[:400])
         return refined
+
+    async def _extract_with_vision(
+        self,
+        screenshot_bytes: bytes,
+        *,
+        mime_type: str,
+        goal: Optional[str],
+        max_results: int,
+    ) -> List[CompanyRecord]:
+        if not self.vision_llm:
+            return []
+
+        task = goal or "Identify company or organization names from the first column of the visible listings."
+        prompt = (
+            "You are looking at a webpage screenshot. "
+            "Extract the company or organization names visible in the first column of any table or list related to filings. "
+            "Return up to {max_results} results as a JSON array of objects with keys 'name' and optional 'context'. "
+            "If nothing fits, return []."
+        ).format(max_results=max_results)
+
+        payload = VisionPrompt(
+            prompt=f"Goal: {task}",
+            image_bytes=screenshot_bytes,
+            mime_type=mime_type,
+            max_tokens=700,
+        )
+
+        try:
+            result: LLMResult = await self.vision_llm.describe(payload)
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOG.warning("extraction_vision_call_failed", error=str(exc))
+            self._debug("vision_error", str(exc))
+            return []
+
+        records = self._parse_llm_response(result.text, fallback=[])
+        self._debug("vision_response", result.text)
+        if records:
+            return records[:max_results]
+
+        converted = await self._convert_text_to_records(
+            result.text,
+            max_results=max_results,
+            goal=goal,
+            source="vision",
+        )
+        if converted:
+            return converted[:max_results]
+
+        return []
+
+    async def _extract_from_dom(
+        self,
+        dom_excerpt: str,
+        *,
+        max_results: int,
+        goal: Optional[str],
+    ) -> List[CompanyRecord]:
+        return await self._convert_text_to_records(
+            dom_excerpt,
+            max_results=max_results,
+            goal=goal,
+            source="dom",
+        )
+
+    async def _convert_text_to_records(
+        self,
+        text: str,
+        *,
+        max_results: int,
+        goal: Optional[str],
+        source: str,
+    ) -> List[CompanyRecord]:
+        if not self.llm:
+            return []
+
+        snippet = text[:12000]
+        task = goal or "Identify company or organization names from the provided content."
+        messages = [
+            ChatMessage(
+                role="system",
+                content=(
+                    "You normalize unstructured web content into structured JSON. "
+                    "Return a JSON array of objects with keys 'name' and optional 'context' "
+                    "containing company or customer names referenced in case studies. "
+                    "Skip navigation, footer links, and generic headings."
+                ),
+            ),
+            ChatMessage(
+                role="user",
+                content=(
+                    "Goal: {task}\n"
+                    "Return up to {max_results} relevant entries as JSON array with keys 'name' and optional 'context'.\n"
+                    "If nothing fits, reply with [].\n"
+                    "Source ({source}) snippet:\n{snippet}"
+                ).format(task=task, max_results=max_results, snippet=snippet, source=source),
+            ),
+        ]
+
+        try:
+            result: LLMResult = await self.llm.complete(messages, max_tokens=900, temperature=0.0)  # type: ignore[arg-type]
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOG.warning(f"extraction_{source}_llm_call_failed", error=str(exc))
+            self._debug(f"{source}_llm_error", str(exc))
+            return []
+
+        records = self._parse_llm_response(result.text, fallback=[])
+        self._debug(f"{source}_llm_response", result.text)
+        return records[:max_results]
 
     def _clean_name(self, text: str) -> str:
         cleaned = re.sub(r"^\d+[\.)-]*\s*", "", text)

@@ -41,6 +41,42 @@ class ClickSelectorTool:
         return ToolResult(success=True, observation=observation)
 
 
+class ClickLinkTextTool:
+    """Click a link based on its visible text."""
+
+    name = "click_link_text"
+
+    async def execute(self, context: AgentContext, **params: Any) -> ToolResult:
+        link_text = params.get("link_text")
+        if not link_text:
+            return ToolResult(success=False, error="Missing 'link_text' parameter")
+
+        page: Optional[Page] = context.artifacts.get("page")  # type: ignore[assignment]
+        if page is None:
+            return ToolResult(success=False, error="No active page bound to context")
+
+        exact = params.get("exact", False)
+        wait_ms = int(params.get("wait_after_ms", 1000))
+
+        try:
+            locator = page.get_by_role("link", name=link_text, exact=exact)
+            count = await locator.count()
+            if count == 0:
+                locator = page.get_by_text(link_text, exact=exact)
+            await locator.first.click()
+            if wait_ms:
+                await asyncio.sleep(wait_ms / 1000)
+        except Exception as exc:  # pylint: disable=broad-except
+            return ToolResult(success=False, error=str(exc))
+
+        context.artifacts.setdefault("visited_pagination", set()).add(
+            params.get("candidate_key") or link_text
+        )
+        context.artifacts["pending_observe"] = True
+        observation = {"event": "click_link", "link_text": link_text}
+        return ToolResult(success=True, observation=observation)
+
+
 class ScrollPageTool:
     """Scroll the page by a configurable amount or to bottom."""
 

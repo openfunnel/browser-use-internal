@@ -86,18 +86,15 @@ class AgentOrchestrator:
             context.notes.append(rationale_note)
 
             if action.is_terminal:
-                if self._should_force_continue(context):
-                    context.notes.append(
-                        "Planner requested stop but page not fully processed; auto-scrolling instead"
-                    )
-                    action = ToolAction(
-                        tool_name="scroll_page",
-                        params={"mode": "bottom"},
-                        rationale="Auto scroll to reach bottom before stopping",
-                    )
-                else:
+                continuation = self._next_continuation_action(context)
+                if continuation is None:
                     context.completed = True
                     break
+                context.notes.append(
+                    "Planner requested stop but agent identified more work; scheduling "
+                    f"{continuation.tool_name}"
+                )
+                action = continuation
 
             tool = self.tools.get(action.tool_name)
             if tool is None:
@@ -143,13 +140,51 @@ class AgentOrchestrator:
 
         await asyncio.sleep(0)
 
-    def _should_force_continue(self, context: AgentContext) -> bool:
-        if not context.observations:
-            return False
-        last = context.observations[-1]
-        if last.get("type") == "page_state" and last.get("is_at_bottom") is False:
-            return True
-        return False
+    def _next_continuation_action(self, context: AgentContext) -> ToolAction | None:
+        last_observation = context.observations[-1] if context.observations else None
+        if not last_observation:
+            return None
+
+        if last_observation.get("type") == "page_state" and last_observation.get("is_at_bottom") is False:
+            return ToolAction(
+                tool_name="scroll_page",
+                params={"mode": "bottom"},
+                rationale="Auto scroll to reach page bottom",
+            )
+
+        pagination_action = self._pagination_followup_action(context, last_observation)
+        if pagination_action:
+            return pagination_action
+
+        return None
+
+    def _pagination_followup_action(
+        self, context: AgentContext, observation: Dict[str, Any]
+    ) -> ToolAction | None:
+        candidates = observation.get("pagination_candidates") or []
+        if not candidates:
+            return None
+
+        visited: set[str] = context.artifacts.setdefault("visited_pagination", set())  # type: ignore[assignment]
+
+        for candidate in candidates:
+            text = (candidate.get("text") or "").strip()
+            href = (candidate.get("href") or "").strip()
+            key = href or text
+            if not key or key in visited:
+                continue
+            return ToolAction(
+                tool_name="click_link_text",
+                params={
+                    "link_text": text or href or "Next",
+                    "exact": bool(text),
+                    "candidate_key": key,
+                    "wait_after_ms": 1500,
+                },
+                rationale=f"Auto paginate using link '{text or href}'",
+            )
+
+        return None
 
 
 __all__ = [

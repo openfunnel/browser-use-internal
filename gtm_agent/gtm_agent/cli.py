@@ -11,13 +11,13 @@ from typing import Dict
 import structlog
 
 from .config import AgentConfig, PlaywrightConfig
-from .llm.anthropic import AnthropicTextClient
+from .llm.anthropic import AnthropicTextClient, AnthropicVisionClient
 from .llm.prompts import ToolDescriptor
 from .orchestrator import AgentOrchestrator
 from .playwright_session import PlaywrightSessionManager
 from .planners import LLMPlanner
 from .tools.extraction import CompanyExtractionTool
-from .tools.interaction import ClickSelectorTool, ScrollPageTool
+from .tools.interaction import ClickLinkTextTool, ClickSelectorTool, ScrollPageTool
 from .tools.observation import ObservePageTool
 
 _LOG = structlog.get_logger(__name__)
@@ -31,15 +31,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=24, help="Maximum planner steps")
     parser.add_argument("--no-screenshot", action="store_true", help="Disable screenshot capture during observations")
     parser.add_argument("--model", default=None, help="Override text model identifier")
+    parser.add_argument("--vision-model", default=None, help="Override vision model identifier")
     return parser.parse_args()
 
 
-def build_toolkit(disable_screenshot: bool, text_client: AnthropicTextClient) -> Dict[str, object]:
+def build_toolkit(
+    disable_screenshot: bool,
+    text_client: AnthropicTextClient,
+    vision_client: AnthropicVisionClient | None,
+) -> Dict[str, object]:
     return {
         "observe_page": ObservePageTool(include_screenshot=not disable_screenshot, max_dom_chars=18000),
         "click_selector": ClickSelectorTool(),
+        "click_link_text": ClickLinkTextTool(),
         "scroll_page": ScrollPageTool(),
-        "company_extract": CompanyExtractionTool(llm=text_client),
+        "company_extract": CompanyExtractionTool(text_llm=text_client, vision_llm=vision_client),
     }
 
 
@@ -54,6 +60,11 @@ def build_tool_descriptors() -> list[ToolDescriptor]:
             name="click_selector",
             description="Click an element identified by a CSS selector",
             arg_schema='{ "selector": "string", "wait_after_ms": int }',
+        ),
+        ToolDescriptor(
+            name="click_link_text",
+            description="Click a link using its visible text (used for pagination)",
+            arg_schema='{ "link_text": "string", "exact": bool }',
         ),
         ToolDescriptor(
             name="scroll_page",
@@ -73,16 +84,27 @@ async def run_agent(args: argparse.Namespace) -> int:
         _LOG.error("missing_api_key", message="ANTHROPIC_API_KEY environment variable is required")
         return 1
 
-    llm_client = AnthropicTextClient()
-    if args.model:
-        llm_client.config.text_model = args.model
-
     config = AgentConfig(max_steps=args.max_steps)
+    if args.model:
+        config.llm.text_model = args.model
+        if args.vision_model is None:
+            config.llm.vision_model = args.model
+    if args.vision_model:
+        config.llm.vision_model = args.vision_model
     config.playwright.headless = False#args.headless
 
-    tools = build_toolkit(disable_screenshot=args.no_screenshot, text_client=llm_client)
+    text_client = AnthropicTextClient(config=config.llm)
+    vision_client = None
+    if config.llm.vision_model:
+        vision_client = AnthropicVisionClient(config=config.llm)
+
+    tools = build_toolkit(
+        disable_screenshot=args.no_screenshot,
+        text_client=text_client,
+        vision_client=vision_client,
+    )
     planner = LLMPlanner(
-        llm=llm_client,
+        llm=text_client,
         tool_descriptors=build_tool_descriptors(),
     )
 
