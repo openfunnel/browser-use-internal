@@ -62,6 +62,7 @@ class ScrollPageTool:
                     max_iterations=int(params.get("max_iterations", 30)),
                 )
                 observation = {"event": "scroll_bottom", **scroll_info}
+                context.artifacts["pending_observe"] = True
             else:
                 await actions.scroll_by(
                     x=int(params.get("x", 0)),
@@ -80,6 +81,7 @@ class ScrollPageTool:
                 wait_ms = params.get("wait_after_ms", 200)
                 if wait_ms:
                     await asyncio.sleep(wait_ms / 1000)
+                context.artifacts["pending_observe"] = True
         except Exception as exc:  # pylint: disable=broad-except
             return ToolResult(success=False, error=str(exc))
 

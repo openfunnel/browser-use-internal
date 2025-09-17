@@ -86,8 +86,18 @@ class AgentOrchestrator:
             context.notes.append(rationale_note)
 
             if action.is_terminal:
-                context.completed = True
-                break
+                if self._should_force_continue(context):
+                    context.notes.append(
+                        "Planner requested stop but page not fully processed; auto-scrolling instead"
+                    )
+                    action = ToolAction(
+                        tool_name="scroll_page",
+                        params={"mode": "bottom"},
+                        rationale="Auto scroll to reach bottom before stopping",
+                    )
+                else:
+                    context.completed = True
+                    break
 
             tool = self.tools.get(action.tool_name)
             if tool is None:
@@ -110,6 +120,19 @@ class AgentOrchestrator:
             if not result.success:
                 break
 
+            if context.artifacts.pop("pending_observe", False):
+                observe_tool = self.tools.get("observe_page")
+                if observe_tool is not None:
+                    observe_result = await observe_tool.execute(context)
+                    noted = "Auto-observed page after scrolling"
+                    if observe_result.observation:
+                        context.add_observation(observe_result.observation)
+                    if observe_result.success:
+                        context.notes.append(noted)
+                    else:
+                        context.notes.append(noted + f" -> failure: {observe_result.error or 'unknown error'}")
+                        break
+
             await self._apply_throttling()
 
         context.completed = context.completed or context.step_count >= self.config.max_steps
@@ -119,6 +142,14 @@ class AgentOrchestrator:
         """Simple async hook to let the event loop breathe between steps."""
 
         await asyncio.sleep(0)
+
+    def _should_force_continue(self, context: AgentContext) -> bool:
+        if not context.observations:
+            return False
+        last = context.observations[-1]
+        if last.get("type") == "page_state" and last.get("is_at_bottom") is False:
+            return True
+        return False
 
 
 __all__ = [
