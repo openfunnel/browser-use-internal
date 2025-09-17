@@ -64,14 +64,14 @@ class CompanyExtractor:
         dom_excerpt: Optional[str] = None,
         screenshot_bytes: Optional[bytes] = None,
         screenshot_mime_type: str = "image/png",
-    ) -> List[CompanyRecord]:
+    ) -> tuple[List[CompanyRecord], str]:
         candidates = await self._collect_candidates()
         unique = self._dedupe(candidates)
 
         combined = list(unique)
 
         if self.vision_llm and screenshot_bytes:
-            vision_records = await self._extract_with_vision(
+            vision_records, vision_source = await self._extract_with_vision(
                 screenshot_bytes,
                 mime_type=screenshot_mime_type,
                 goal=goal,
@@ -79,6 +79,7 @@ class CompanyExtractor:
             )
             if vision_records:
                 combined = self._merge_records(combined, vision_records)
+                return combined[:max_results], vision_source
 
         if self.llm:
             if combined:
@@ -89,17 +90,17 @@ class CompanyExtractor:
                     dom_excerpt=dom_excerpt,
                 )
                 if refined:
-                    return refined[:max_results]
+                    return refined[:max_results], "dom_llm_refine"
             elif dom_excerpt:
-                direct = await self._extract_from_dom(
+                direct, dom_source = await self._extract_from_dom(
                     dom_excerpt,
                     max_results=max_results,
                     goal=goal,
                 )
                 if direct:
-                    return direct[:max_results]
+                    return direct[:max_results], dom_source
 
-        return combined[:max_results]
+        return combined[:max_results], "dom_heuristic"
 
     def _debug(self, stage: str, message: str) -> None:
         preview = message.strip()
@@ -207,9 +208,9 @@ class CompanyExtractor:
         mime_type: str,
         goal: Optional[str],
         max_results: int,
-    ) -> List[CompanyRecord]:
+    ) -> tuple[List[CompanyRecord], str]:
         if not self.vision_llm:
-            return []
+            return [], "vision_unavailable"
 
         task = goal or "Identify company or organization names from the first column of the visible listings."
         prompt = (
@@ -231,12 +232,12 @@ class CompanyExtractor:
         except Exception as exc:  # pylint: disable=broad-except
             _LOG.warning("extraction_vision_call_failed", error=str(exc))
             self._debug("vision_error", str(exc))
-            return []
+            return [], "vision_error"
 
         records = self._parse_llm_response(result.text, fallback=[])
         self._debug("vision_response", result.text)
         if records:
-            return records[:max_results]
+            return records[:max_results], "vision_json"
 
         converted = await self._convert_text_to_records(
             result.text,
@@ -245,9 +246,9 @@ class CompanyExtractor:
             source="vision",
         )
         if converted:
-            return converted[:max_results]
+            return converted[:max_results], "vision_llm"
 
-        return []
+        return [], "vision_empty"
 
     async def _extract_from_dom(
         self,
@@ -255,13 +256,14 @@ class CompanyExtractor:
         *,
         max_results: int,
         goal: Optional[str],
-    ) -> List[CompanyRecord]:
-        return await self._convert_text_to_records(
+    ) -> tuple[List[CompanyRecord], str]:
+        records = await self._convert_text_to_records(
             dom_excerpt,
             max_results=max_results,
             goal=goal,
             source="dom",
         )
+        return records, "dom_llm"
 
     async def _convert_text_to_records(
         self,

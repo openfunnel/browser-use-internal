@@ -49,7 +49,7 @@ class CompanyExtractionTool:
             except Exception:  # pylint: disable=broad-except
                 screenshot_bytes = None
 
-        records = await extractor.extract(
+        records, source = await extractor.extract(
             max_results=params.get("max_results", 25),
             goal=context.goal,
             dom_excerpt=dom_excerpt,
@@ -66,6 +66,7 @@ class CompanyExtractionTool:
         if not extraction_payload and debug_events:
             for stage, message in debug_events[-3:]:
                 context.notes.append(f"company_extract::{stage}: {message}")
+        context.notes.append(f"company_extract::source={source}")
 
         return ToolResult(
             success=True,
@@ -73,6 +74,7 @@ class CompanyExtractionTool:
                 "companies": extraction_payload,
                 "count": len(extraction_payload),
                 "is_at_bottom": (last_observation or {}).get("is_at_bottom"),
+                "source": source,
             },
             data={"debug_events": debug_events} if debug_events else None,
         )

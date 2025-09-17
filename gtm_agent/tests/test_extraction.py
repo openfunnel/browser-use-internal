@@ -90,32 +90,35 @@ class StubVisionEnum:
 @pytest.mark.asyncio
 async def test_company_extractor_filters_and_formats():
     extractor = CompanyExtractor(dom=StubDom())
-    results = await extractor.extract()
+    results, source = await extractor.extract()
 
     names = [record.name for record in results]
     assert "Company A" in names
     assert "Privacy Policy" not in names
+    assert source == "dom_heuristic"
 
 
 @pytest.mark.asyncio
 async def test_company_extractor_uses_llm_when_available():
     llm = StubLLM()
     extractor = CompanyExtractor(dom=StubDom(), llm=llm)
-    results = await extractor.extract(max_results=3)
+    results, source = await extractor.extract(max_results=3)
 
     assert [record.name for record in results] == ["Company A"]
     assert isinstance(llm.messages[0], ChatMessage)
+    assert source == "dom_llm_refine"
 
 
 @pytest.mark.asyncio
 async def test_company_extractor_merges_vision_results():
     vision = StubVision()
     extractor = CompanyExtractor(dom=StubDom(), vision_llm=vision)
-    results = await extractor.extract(max_results=3, screenshot_bytes=b"img data")
+    results, source = await extractor.extract(max_results=3, screenshot_bytes=b"img data")
 
     names = {record.name for record in results}
     assert "Vision Co" in names
     assert vision.requests, "Expected the vision client to be called"
+    assert source.startswith("vision")
 
 
 @pytest.mark.asyncio
@@ -131,7 +134,7 @@ async def test_company_extraction_tool_captures_screenshot_for_vision():
 
     with patch("gtm_agent.tools.extraction.CompanyExtractor") as mock_extractor_cls:
         mock_instance = mock_extractor_cls.return_value
-        mock_instance.extract = AsyncMock(return_value=[])
+        mock_instance.extract = AsyncMock(return_value=([], "dom_heuristic"))
         mock_instance.debug_events = []
 
         await tool.execute(context)
@@ -147,10 +150,11 @@ async def test_company_extractor_falls_back_to_dom_llm_when_no_candidates():
     llm = StubLLMDom()
     extractor = CompanyExtractor(dom=StubDomEmpty(), llm=llm)
     dom_excerpt = "<section><h2>Dom LLM Co</h2><p>Success story</p></section>"
-    results = await extractor.extract(max_results=5, dom_excerpt=dom_excerpt)
+    results, source = await extractor.extract(max_results=5, dom_excerpt=dom_excerpt)
 
     assert [record.name for record in results] == ["Dom LLM Co"]
     assert llm.messages, "Expected DOM LLM call"
+    assert source == "dom_llm"
 
 
 @pytest.mark.asyncio
@@ -159,9 +163,10 @@ async def test_company_extractor_vision_fallback_uses_text_llm():
     vision = StubVisionEnum()
     extractor = CompanyExtractor(dom=StubDomEmpty(), llm=text_llm, vision_llm=vision)
 
-    results = await extractor._extract_with_vision(
+    results, source = await extractor._extract_with_vision(
         b"image-bytes", mime_type="image/png", goal="Find customers", max_results=10
     )
 
     assert [record.name for record in results] == ["Central", "Fini", "NUMI", "Cekura"]
     assert text_llm.messages is not None, "Expected text LLM to format vision response"
+    assert source == "vision_llm"
